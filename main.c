@@ -1,9 +1,10 @@
 /*
- * diskpi - a pie chart of what is using space in a directory.
+ * diskpi - a chart of what is using space in a directory.
  */
 
 #define _DEFAULT_SOURCE
 
+#include "chart.h"
 #include "diskpi.h"
 
 #include <stdio.h>
@@ -20,6 +21,14 @@ static const int  symbols_len = (int)(sizeof(symbols) - 1);
  * see and the legend outgrows the screen. The real limit is the terminal. */
 #define SLICE_CEILING 28
 
+/* Narrowest legend line that still fits inside the width it is given:
+ * a marker, a six-column name, the size and the percentage. */
+#define LEGEND_MIN 26
+
+/* Rows the frame costs: a blank line, the two header lines, a blank line
+ * before the chart, and a blank line after it. */
+#define FRAME_ROWS 5
+
 static int cmp_entry(const void *a, const void *b)
 {
     const Entry *ea = a, *eb = b;
@@ -31,8 +40,9 @@ static int cmp_entry(const void *a, const void *b)
 static void usage(const char *argv0)
 {
     printf("usage: %s [options] [path]\n\n", argv0);
-    printf("  Draws a pie chart of disk usage for a directory "
-           "(default: current).\n\n");
+    printf("  Charts disk usage for a directory (default: current).\n\n");
+    printf("  --chart=NAME  chart type (default pie); "
+           "--chart=list names them all\n");
     printf("  --mode=MODE   pixels | blocks | ascii | auto (default auto)\n");
     printf("                pixels uses the terminal graphics protocol,\n");
     printf("                blocks uses half-block characters.\n");
@@ -42,10 +52,18 @@ static void usage(const char *argv0)
     printf("  -h, --help    this message\n");
 }
 
+static void list_charts(void)
+{
+    for (int i = 0; i < CHART_COUNT; i++)
+        printf("%-9s %s\n", chart_name((ChartKind)i),
+               chart_desc((ChartKind)i));
+}
+
 int main(int argc, char **argv)
 {
     const char *target = ".";
     Mode wanted = MODE_AUTO;
+    ChartKind kind = CHART_PIE;
     bool want_color = true;
     int force_cell_w = 0, force_cell_h = 0;
 
@@ -54,7 +72,18 @@ int main(int argc, char **argv)
 
         if (strcmp(a, "--no-color") == 0 || strcmp(a, "--no-colour") == 0)
             want_color = false;
-        else if (strncmp(a, "--mode=", 7) == 0) {
+        else if (strncmp(a, "--chart=", 8) == 0) {
+            const char *c = a + 8;
+            if (strcmp(c, "list") == 0) {
+                list_charts();
+                return 0;
+            }
+            if (!chart_lookup(c, &kind)) {
+                fprintf(stderr, "diskpi: unknown chart '%s' "
+                                "(try --chart=list)\n", c);
+                return 1;
+            }
+        } else if (strncmp(a, "--mode=", 7) == 0) {
             const char *m = a + 7;
             if (strcmp(m, "pixels") == 0)      wanted = MODE_PIXELS;
             else if (strcmp(m, "blocks") == 0) wanted = MODE_BLOCKS;
@@ -129,27 +158,24 @@ int main(int argc, char **argv)
     /* ------------------------------------------------------- layout maths */
 
     int indent = 2;
-    int rows_avail = t.rows - 4;
-    if (rows_avail < 4)
-        rows_avail = 4;
+    int rows_avail = t.rows - FRAME_ROWS;
+    if (rows_avail < 1)
+        rows_avail = 1;
 
-    /* A wide terminal earns a file-count column in the legend. */
+    /* A wide terminal earns a file-count column in the legend. Below
+     * LEGEND_MIN a legend line cannot hold its fixed size and percentage
+     * columns and would overrun; charts fall back to text well before that. */
     int legend_w = t.cols >= 96 ? 54 : t.cols / 2;
     if (legend_w > 54)
         legend_w = 54;
-    if (legend_w < 24)
-        legend_w = 24;
+    if (legend_w < LEGEND_MIN)
+        legend_w = LEGEND_MIN;
+    if (legend_w > t.cols - indent)
+        legend_w = t.cols - indent;
 
-    int by_cols = (t.cols - indent - legend_w - 3) / 4;
-    int by_rows = rows_avail / 2;
-    int radius = by_cols < by_rows ? by_cols : by_rows;
-    if (radius > 26)
-        radius = 26;
-
-    bool pie = radius >= 4 && t.cols >= 44;
-
-    /* How many wedges fit? The legend, not the circle, is the constraint. */
-    int max_slices = pie ? rows_avail : rows_avail / 2;
+    /* How many slices are worth drawing? The legend, not the shape, is the
+     * constraint, and every chart lays its own out within these rows. */
+    int max_slices = rows_avail;
     if (max_slices > SLICE_CEILING)
         max_slices = SLICE_CEILING;
     if (max_slices < 4)
@@ -248,18 +274,25 @@ int main(int argc, char **argv)
     t_reset(&t);
     fputc('\n', stdout);
 
+    char raw[256], summary[256];
+    snprintf(raw, sizeof(raw), "%s across %d entr%s, %lld file%s", total_buf,
+             n, n == 1 ? "y" : "ies", total_files,
+             total_files == 1 ? "" : "s");
+    fit(raw, summary, sizeof(summary), t.cols - indent);
+
     for (int k = 0; k < indent; k++)
         fputc(' ', stdout);
     t_dim(&t);
-    printf("%s across %d entr%s, %lld file%s\n", total_buf, n,
-           n == 1 ? "y" : "ies", total_files, total_files == 1 ? "" : "s");
+    fputs(summary, stdout);
     t_reset(&t);
     fputc('\n', stdout);
+    fputc('\n', stdout);
 
-    if (pie)
-        render_pie(&t, &chart, mode, radius, legend_w, indent);
-    else
-        render_bars(&t, &chart, t.cols);
+    ChartCtx ctx = {
+        &t, &chart, mode, label, total, total_files, n,
+        t.cols, rows_avail, legend_w, indent
+    };
+    chart_draw(&ctx, kind);
 
     fputc('\n', stdout);
     fflush(stdout);

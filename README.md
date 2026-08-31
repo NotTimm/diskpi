@@ -1,43 +1,65 @@
 # diskpi
 
-A terminal pie chart of what's eating space in a directory.
+Charts of what's eating space in a directory, drawn straight into the
+terminal — real antialiased shapes where the terminal supports it, not
+blocky ASCII.
 
 ```
 make
-./diskpi            # current directory
-./diskpi /var/log   # or any path
+./diskpi                       # current directory, pie chart
+./diskpi /var/log              # or any path
+./diskpi --chart=doughnut .
+./diskpi --chart=list          # show every chart type
 ```
 
-`make install` puts it in `/usr/local/bin` (`PREFIX=~/.local make install` for a
-user install).
+`make install` puts it in `/usr/local/bin` (`PREFIX=~/.local make install` for
+a user install).
 
-## What it does
+## Chart types
 
-Every entry in the directory is measured — plain files by their own size,
+Plain `diskpi` always draws a pie chart. Everything else is opt-in via
+`--chart=NAME`:
+
+| name       | what it shows |
+|------------|----------------|
+| `pie`      | circular wedges, one per entry (the default) |
+| `doughnut` | pie with the total size and entry count in the hole |
+| `bar`      | horizontal bars, largest first |
+| `column`   | vertical bars along a baseline |
+| `stacked`  | one bar, every entry stacked to 100% |
+| `line`     | cumulative share of the total by rank (the Pareto curve) |
+| `area`     | the same curve, filled |
+| `scatter`  | file count against size, log/log |
+| `bubble`   | file count against size, bubble area = size |
+| `radar`    | the largest entries as spokes |
+| `table`    | comparison table with inline sub-cell bars |
+| `gauge`    | how full the filesystem is, and this tree's share of it |
+
+## What it measures
+
+Every entry in the directory is sized — plain files by their own size,
 directories by recursively summing their contents the way `du` does. Symlinks
-are counted as the link, never followed, so symlink loops can't hang it and
-unreadable directories are skipped rather than aborting the run.
+count as the link and are never followed, so a symlink loop can't hang it and
+an unreadable directory is skipped rather than aborting the run. The largest
+entries get their own slice or bar; everything past what fits on screen
+collapses into a single "N smaller items" entry so nothing overflows.
 
-The ten largest entries get their own slice; everything below that collapses
-into a single grey "N smaller items" slice so the legend stays readable.
+## Rendering
 
-## Layout
+Every chart is defined once as geometry — wedges, rounded bars, polylines,
+polygons — on a small antialiased canvas (`canvas.c`), then presented one of
+three ways depending on what the terminal can actually do:
 
-The chart is rasterized per character cell: a cell is filled when it falls
-inside the unit circle, and its colour comes from the angle measured clockwise
-from twelve o'clock. Horizontal coordinates are scaled 2:1 against vertical
-ones, because terminal cells are about twice as tall as they are wide — that's
-what keeps the circle round instead of egg-shaped.
+- **pixels** — real per-pixel antialiasing, sent as a true-colour image
+  through the Kitty graphics protocol (Ghostty, Kitty, WezTerm, Konsole).
+- **blocks** — Unicode half blocks (`▀`), giving two colour rows per text row,
+  used when the terminal has colour but not graphics.
+- **ascii** — one character per cell, used when there is no colour at all
+  (piping to a file, `--no-color`, or a genuinely minimal terminal).
 
-The radius is recomputed on every run from the live terminal size
-(`TIOCGWINSZ`), bounded by both the rows available and the columns left over
-after reserving the legend. Below roughly 40 columns, or when there isn't room
-for a circle at least four rows in radius, it falls back to a horizontal bar
-list instead.
-
-## Colour
-
-Output uses 256-colour ANSI. Colour is dropped automatically when stdout isn't
-a TTY (piping to a file or a pager), or with `--no-color`; in that mode each
-slice is drawn with a distinct ASCII symbol shown in the legend, so the chart
-still reads in plain text.
+Terminal capabilities are detected once at startup by querying the terminal
+directly — a Kitty graphics probe, a background-colour query, a cell-size
+query — rather than guessing from `$TERM`, and the whole layout (radius,
+legend width, how many entries fit) is recomputed from the live terminal size
+on every run. `--mode=` and `--cell=WxH` override detection when a terminal
+doesn't answer, or answers wrong.

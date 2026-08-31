@@ -64,8 +64,4 @@ void human_size(long long bytes, char *out, size_t out_len);
 int  display_width(const char *s);
 void fit(const char *src, char *dst, size_t dst_len, int width);
 
-void render_pie(const Term *t, const Chart *c, Mode mode,
-                int radius, int legend_w, int indent);
-void render_bars(const Term *t, const Chart *c, int width);
-
 #endif /* DISKPI_H */
