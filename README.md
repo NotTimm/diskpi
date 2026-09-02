@@ -1,14 +1,14 @@
 # diskpi
 
-Charts of what's eating space in a directory, printed straight to the
-terminal as plain text — as fast as the scan itself allows, nothing else in
-the way.
+Charts of what's eating space in a directory, drawn straight into the
+terminal in plain characters — no images, no graphics protocol, as fast as
+the scan itself allows.
 
 ```
 make
 ./diskpi                       # current directory, pie chart
 ./diskpi /var/log              # or any path
-./diskpi --chart=table .
+./diskpi --chart=radar .
 ./diskpi --chart=list          # show every chart type
 ```
 
@@ -22,18 +22,18 @@ Plain `diskpi` always draws a pie chart. Everything else is opt-in via
 
 | name       | what it shows |
 |------------|----------------|
-| `pie`      | legend of wedges, biggest share first (the default) |
-| `doughnut` | pie, with a total-and-count line up top |
-| `bar`      | horizontal bars, largest first |
-| `column`   | same as `bar` — a column has no meaningful text form |
+| `pie`      | a wedge circle, biggest share first (the default) |
+| `doughnut` | pie, with the total and entry count in the hole |
+| `bar`      | rounded horizontal bars on a track, largest first |
+| `column`   | the same bars standing upright |
 | `stacked`  | one row of proportional symbols, every entry to 100% |
 | `line`     | cumulative share of the total by rank (the Pareto curve) |
 | `area`     | the same curve |
 | `scatter`  | file count against size, one line per entry |
 | `bubble`   | same table as `scatter` |
-| `radar`    | the largest entries, named in rank order |
+| `radar`    | a filled polygon, one spoke per entry |
 | `table`    | comparison table with inline sub-cell bars |
-| `gauge`    | how full the filesystem is, and this tree's share of it |
+| `gauge`    | a 270-degree arc of how full the filesystem is |
 
 ## What it measures
 
@@ -52,9 +52,18 @@ rather than however long one thread alone would take.
 
 ## Rendering
 
-Everything is plain terminal text and ANSI colour — no graphics protocol,
-no half-block drawing, nothing that has to be decoded before it's a chart.
+Pie/doughnut, bar/column, radar and gauge are drawn as actual shapes using
+braille characters (U+2800–U+28FF) — the same trick tools like btop use for
+round-looking graphs in plain text. Each terminal cell holds an 8-dot
+subgrid (2 wide, 4 tall), so a circle or a rounded bar gets eight times the
+resolution of one symbol per cell, with no image protocol, no half-block
+colour cells and nothing to decode: it's still just characters and ANSI
+colour, printed once (`dots.c`). Stacked/line/area/scatter/bubble/table stay
+plain text, since a table's inline bars and a ranked list already read
+correctly without a drawn shape.
+
 Terminal size comes straight from the kernel (`ioctl(TIOCGWINSZ)`) and colour
 support from `$TERM`/`$COLORTERM`, both instant, so there is no round trip to
-the terminal before anything can be drawn. `--no-color` drops colour entirely
-and falls back to one symbol per entry.
+the terminal before anything can be drawn. `--no-color` drops colour entirely;
+the dot shapes still draw, just uncoloured, and the text-only charts fall
+back to one symbol per entry.
