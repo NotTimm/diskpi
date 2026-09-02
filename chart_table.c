@@ -1,18 +1,17 @@
 /*
- * The two charts that are mostly type rather than shape.
+ * The two charts that were always mostly type rather than shape.
  *
- * chart_table  a dense comparison table. No canvas: the inline bars are
- *              eighth-block characters, which give sub-cell precision and
- *              stay aligned with the text columns for free.
- * chart_gauge  filesystem fullness as a 270 degree arc, with this tree's
- *              share of the whole filesystem on a second, thinner arc.
+ * chart_table  a dense comparison table. The inline bars are eighth-block
+ *              characters, which give sub-cell precision and stay aligned
+ *              with the text columns for free.
+ * chart_gauge  filesystem fullness as an inline meter, with this tree's
+ *              share of the whole filesystem alongside it.
  */
 
 #define _DEFAULT_SOURCE
 
 #include "chart.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/statvfs.h>
@@ -30,23 +29,6 @@ static double clamp01(double v)
     if (!(v > 0.0))
         return 0.0;
     return v > 1.0 ? 1.0 : v;
-}
-
-/* Rules and tracks come from the background, so they sit under the data
- * rather than competing with it. */
-static RGB neutral(const Term *t, double toward_grey)
-{
-    RGB mid = { 128, 128, 134 };
-    if (!t->have_bg) {
-        RGB fixed = { 110, 110, 120 };
-        return fixed;
-    }
-    RGB out = {
-        (unsigned char)(t->bg.r + (mid.r - t->bg.r) * toward_grey),
-        (unsigned char)(t->bg.g + (mid.g - t->bg.g) * toward_grey),
-        (unsigned char)(t->bg.b + (mid.b - t->bg.b) * toward_grey)
-    };
-    return out;
 }
 
 /* U+2588 down to U+258F: index is eighths of a cell, 0 draws nothing. */
@@ -123,7 +105,7 @@ void chart_table(ChartCtx *x)
 
     const Term  *t = x->t;
     const Chart *c = x->data;
-    bool plain = (x->mode == MODE_ASCII || !t->color);
+    bool plain = !t->color;
 
     /* One column stays clear on the right: a row that fills the last cell of
      * the terminal wraps on some of them. */
@@ -268,10 +250,8 @@ void chart_table(ChartCtx *x)
             for (int k = 0; k < table_w; k++)
                 fputc('-', stdout);
         } else {
-            t_fg(t, neutral(t, 0.55));
             for (int k = 0; k < table_w; k++)
                 fputs("\xe2\x94\x80", stdout);       /* U+2500 */
-            t_reset(t);
         }
         fputc('\n', stdout);
     }
@@ -339,95 +319,6 @@ void chart_table(ChartCtx *x)
 
 /* ------------------------------------------------------------- the gauge */
 
-/* Seven segments, bit per segment: A top, B upper right, C lower right,
- * D bottom, E lower left, F upper left, G middle. */
-#define SEG_A 1
-#define SEG_B 2
-#define SEG_C 4
-#define SEG_D 8
-#define SEG_E 16
-#define SEG_F 32
-#define SEG_G 64
-
-static const unsigned char seg_of[10] = {
-    63, 6, 91, 79, 102, 109, 125, 7, 127, 111
-};
-
-static void seg_bar(Canvas *cv, double x, double y, double w, double h,
-                    double r, RGB col)
-{
-    if (w <= 0.0 || h <= 0.0)
-        return;
-    canvas_round_rect(cv, x, y, w, h, r, col, 1.0);
-}
-
-/* One digit in a w x h box, stroke thickness t. */
-static void seg_digit(Canvas *cv, int d, double x, double y,
-                      double w, double h, double t, RGB col)
-{
-    unsigned m = seg_of[d];
-    double inset = t * 0.2;
-    double hw = w - t - 2.0 * inset;         /* horizontal segment length */
-    double vh = (h - t) / 2.0 - 2.0 * inset; /* vertical segment length */
-    double r = t * 0.35;
-    double mid = y + (h - t) / 2.0;
-
-    if (m & SEG_A) seg_bar(cv, x + t * 0.5 + inset, y, hw, t, r, col);
-    if (m & SEG_G) seg_bar(cv, x + t * 0.5 + inset, mid, hw, t, r, col);
-    if (m & SEG_D) seg_bar(cv, x + t * 0.5 + inset, y + h - t, hw, t, r, col);
-    if (m & SEG_F) seg_bar(cv, x, y + t * 0.5 + inset, t, vh, r, col);
-    if (m & SEG_B) seg_bar(cv, x + w - t, y + t * 0.5 + inset, t, vh, r, col);
-    if (m & SEG_E) seg_bar(cv, x, mid + t * 0.5 + inset, t, vh, r, col);
-    if (m & SEG_C) seg_bar(cv, x + w - t, mid + t * 0.5 + inset, t, vh, r,
-                           col);
-}
-
-static void seg_percent(Canvas *cv, double x, double y, double w, double h,
-                        double t, RGB col)
-{
-    double r = h * 0.13;
-    if (r < t * 0.5)
-        r = t * 0.5;
-    canvas_circle(cv, x + r, y + r, r, col, 1.0);
-    canvas_circle(cv, x + w - r, y + h - r, r, col, 1.0);
-    canvas_line(cv, x + t * 0.3, y + h - t * 0.3, x + w - t * 0.3,
-                y + t * 0.3, t * 0.9, col, 1.0);
-}
-
-/* Width of a percentage string in units of glyph height. */
-static double seg_units(const char *s)
-{
-    double u = 0.0;
-    for (int i = 0; s[i]; i++) {
-        if (i > 0)
-            u += 0.16;
-        u += (s[i] == '%') ? 0.66 : 0.56;
-    }
-    return u;
-}
-
-static void seg_text(Canvas *cv, const char *s, double cx, double cy,
-                     double h, RGB col)
-{
-    double t = h * 0.16;
-    if (t < 1.0)
-        t = 1.0;
-
-    double x = cx - seg_units(s) * h / 2.0;
-    double y = cy - h / 2.0;
-
-    for (int i = 0; s[i]; i++) {
-        double w = (s[i] == '%') ? h * 0.66 : h * 0.56;
-        if (i > 0)
-            x += h * 0.16;
-        if (s[i] == '%')
-            seg_percent(cv, x, y, w, h, t, col);
-        else if (s[i] >= '0' && s[i] <= '9')
-            seg_digit(cv, s[i] - '0', x, y, w, h, t, col);
-        x += w;
-    }
-}
-
 static RGB fullness_color(double frac)
 {
     if (frac < 0.70) { RGB g = {  76, 185, 118 }; return g; }
@@ -488,26 +379,6 @@ static void gauge_line(const GaugeText *g, int i, int indent, int cols)
     fputc('\n', stdout);
 }
 
-static void centred(const Term *t, const char *s, int centre, int indent,
-                    int cols)
-{
-    char cut[128];
-    fit(s, cut, sizeof(cut), cols - indent);
-
-    int w = display_width(cut);
-    int start = centre - w / 2;
-    if (start + w > cols)
-        start = cols - w;
-    if (start < indent)
-        start = indent;
-
-    pad(start);
-    t_dim(t);
-    fputs(cut, stdout);
-    t_reset(t);
-    fputc('\n', stdout);
-}
-
 void chart_gauge(ChartCtx *x)
 {
     if (!x || !x->t || x->rows <= 0 || x->cols <= x->indent)
@@ -561,134 +432,30 @@ void chart_gauge(ChartCtx *x)
     }
 
     RGB used_col = fullness_color(used_frac);
-    RGB tree_col = (x->data && x->data->n > 0)
-                 ? x->data->slice[0]->color : used_col;
-
-    /* Reserve the text first; the arc gets whatever rows are left over. */
-    int lines = g.n > x->rows ? x->rows : g.n;
-    bool caption = have_fs;
-    int arc_rows = x->rows - lines - (caption ? 1 : 0);
-    if (arc_rows < 6 && caption) {
-        caption = false;
-        arc_rows = x->rows - lines;
-    }
-    if (arc_rows > 14)
-        arc_rows = 14;
 
     int avail = x->cols - x->indent;
-    int arc_cols = arc_rows * 3 + 4;
-    if (arc_cols > avail)
-        arc_cols = avail;
+    int budget = x->rows;
 
-    Canvas *cv = NULL;
-    if (have_fs && arc_rows >= 6 && arc_cols >= 12)
-        cv = canvas_new(t, x->mode, arc_cols, arc_rows);
-
-    /* The arc spans 225 degrees round to 135, so it reaches full width but
-     * only 0.707 r below the centre: 1.708 r of height in all. */
-    double radius = 0.0, cx = 0.0, cy = 0.0;
-    if (cv) {
-        double by_w = (cv->w - 2.0) / 2.0;
-        double by_h = (cv->h - 2.0) / 1.708;
-        radius = by_w < by_h ? by_w : by_h;
-        cx = cv->w / 2.0;
-        cy = 1.0 + radius;
-        if (radius < 5.0) {
-            canvas_free(cv);
-            cv = NULL;
+    if (have_fs && budget > 0) {
+        /* "filesystem  " + bar + " " + percentage, one column to spare. */
+        int bar_w = avail - display_width(pct_buf) - 14;
+        if (bar_w > 40)
+            bar_w = 40;
+        if (bar_w >= 4) {
+            pad(x->indent);
+            t_dim(t);
+            fputs("filesystem  ", stdout);
+            t_reset(t);
+            int drawn = inline_bar(t, used_frac, bar_w, used_col,
+                                   !t->color, false);
+            pad(bar_w - drawn);
+            t_dim(t);
+            printf(" %s", pct_buf);
+            t_reset(t);
+            fputc('\n', stdout);
+            budget--;
         }
     }
-
-    if (!cv) {
-        /* No surface, or no room for one: a single inline meter instead. */
-        int budget = x->rows;
-        if (have_fs && budget > 0) {
-            /* "filesystem  " + bar + " " + percentage, one column to spare. */
-            int bar_w = avail - display_width(pct_buf) - 14;
-            if (bar_w > 40)
-                bar_w = 40;
-            if (bar_w >= 4) {
-                pad(x->indent);
-                t_dim(t);
-                fputs("filesystem  ", stdout);
-                t_reset(t);
-                int drawn = inline_bar(t, used_frac, bar_w, used_col,
-                                       x->mode == MODE_ASCII || !t->color,
-                                       false);
-                pad(bar_w - drawn);
-                t_dim(t);
-                printf(" %s", pct_buf);
-                t_reset(t);
-                fputc('\n', stdout);
-                budget--;
-            }
-        }
-        for (int i = 0; i < g.n && budget > 0; i++, budget--)
-            gauge_line(&g, i, x->indent, x->cols);
-        return;
-    }
-
-    double track_t = radius * 0.22;
-    if (track_t < 2.0)
-        track_t = 2.0;
-    double r_out = radius, r_in = radius - track_t;
-
-    double gap = radius * 0.07;
-    if (gap < 1.0)
-        gap = 1.0;
-    double t_out = r_in - gap;
-    double t_thick = track_t * 0.42;
-    if (t_thick < 1.0)
-        t_thick = 1.0;
-    double t_in = t_out - t_thick;
-    bool inner = t_in > radius * 0.25;
-
-    RGB track = neutral(t, 0.45);
-
-    canvas_wedge(cv, cx, cy, r_in, r_out, 225.0, 495.0, track, 0.55);
-    if (used_frac > 0.0)
-        canvas_wedge(cv, cx, cy, r_in, r_out, 225.0,
-                     225.0 + 270.0 * used_frac, used_col, 1.0);
-
-    if (inner) {
-        canvas_wedge(cv, cx, cy, t_in, t_out, 225.0, 495.0, track, 0.3);
-        /* Always at least a hairline: a tree can be a rounding error of the
-         * filesystem and still deserves to be visible. */
-        double sweep = 270.0 * tree_frac;
-        double least = 90.0 / (t_out > 1.0 ? t_out : 1.0);
-        if (tree_frac > 0.0 && sweep < least)
-            sweep = least;
-        if (sweep > 0.0)
-            canvas_wedge(cv, cx, cy, t_in, t_out, 225.0, 225.0 + sweep,
-                         tree_col, 1.0);
-    }
-
-    /* The percentage, as large as the hole in the middle allows: the chord
-     * across the hole at the height of the glyphs, not the diameter. */
-    double hole = inner ? t_in : r_in;
-    double h_by_w = (hole * 1.72) / seg_units(pct_buf);
-    double h_by_h = hole * 1.05;
-    double glyph = h_by_w < h_by_h ? h_by_w : h_by_h;
-    bool big = glyph >= 6.0;
-    if (big)
-        seg_text(cv, pct_buf, cx, cy - radius * 0.04, glyph, used_col);
-
-    canvas_present(cv, t, x->mode, x->indent, arc_rows, NULL, NULL);
-
-    int centre_col = x->indent + (int)(cx / cv->px_w + 0.5);
-    canvas_free(cv);
-
-    if (caption) {
-        char line[96];
-        if (big)
-            snprintf(line, sizeof(line), "%s of %s used", used_buf,
-                     total_buf);
-        else
-            snprintf(line, sizeof(line), "%s used of %s", pct_buf,
-                     total_buf);
-        centred(t, line, centre_col, x->indent, x->cols);
-    }
-
-    for (int i = 0; i < lines; i++)
+    for (int i = 0; i < g.n && budget > 0; i++, budget--)
         gauge_line(&g, i, x->indent, x->cols);
 }

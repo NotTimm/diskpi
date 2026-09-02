@@ -1,9 +1,6 @@
 /*
  * Shared text helpers: colour generation, human-readable sizes, UTF-8 aware
  * truncation, and the legend line every chart type prints.
- *
- * Everything to do with pixels lives in canvas.c; the charts themselves own
- * their geometry.
  */
 
 #define _DEFAULT_SOURCE
@@ -96,7 +93,7 @@ void fit(const char *src, char *dst, size_t dst_len, int width)
 /* ---------------------------------------------------------------- legend */
 
 void legend_line(const Term *t, const Chart *c, int i, int width,
-                 Mode mode, bool show_files)
+                 bool show_files)
 {
     const Entry *e = c->slice[i];
     char size_buf[32], pct_buf[16], files_buf[32], name_buf[512], raw[600];
@@ -136,7 +133,7 @@ void legend_line(const Term *t, const Chart *c, int i, int width,
     snprintf(raw, sizeof(raw), "%s%s", e->name, e->is_dir ? "/" : "");
     fit(raw, name_buf, sizeof(name_buf), name_width);
 
-    if (mode == MODE_ASCII || !t->color) {
+    if (!t->color) {
         printf("%c%c ", e->sym, e->sym);
     } else {
         t_fg(t, e->color);

@@ -5,9 +5,12 @@
  * Chart types. Each one gets the same context and owns its whole output
  * block: it prints its own rows, legend included, and leaves the cursor on
  * the line after itself.
+ *
+ * Everything here is plain terminal text - characters and ANSI colour, no
+ * graphics protocol and no half-block drawing - so a chart draws in exactly
+ * the time it takes to print it.
  */
 
-#include "canvas.h"
 #include "diskpi.h"
 
 typedef enum {
@@ -29,7 +32,6 @@ typedef enum {
 typedef struct {
     const Term  *t;
     const Chart *data;        /* slices, cumulative fractions, percentages */
-    Mode         mode;
     const char  *path;        /* directory being shown */
     long long    total;       /* bytes across every entry */
     long long    total_files;
@@ -45,8 +47,7 @@ const char *chart_name(ChartKind k);
 const char *chart_desc(ChartKind k);
 bool        chart_lookup(const char *name, ChartKind *out);
 
-/* Draws the chart. Every implementation must cope with a canvas that could
- * not be allocated (fall back to text) and with very small cell budgets. */
+/* Draws the chart. */
 void chart_draw(ChartCtx *x, ChartKind kind);
 
 /* Implementations, one per file. */
@@ -63,6 +64,6 @@ void chart_gauge(ChartCtx *x);
  * exactly `width` columns and needs at least 26 of them; ChartCtx.legend_w
  * is never smaller. */
 void legend_line(const Term *t, const Chart *c, int i, int width,
-                 Mode mode, bool show_files);
+                 bool show_files);
 
 #endif /* CHART_H */

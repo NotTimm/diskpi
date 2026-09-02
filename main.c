@@ -43,11 +43,6 @@ static void usage(const char *argv0)
     printf("  Charts disk usage for a directory (default: current).\n\n");
     printf("  --chart=NAME  chart type (default pie); "
            "--chart=list names them all\n");
-    printf("  --mode=MODE   pixels | blocks | ascii | auto (default auto)\n");
-    printf("                pixels uses the terminal graphics protocol,\n");
-    printf("                blocks uses half-block characters.\n");
-    printf("  --cell=WxH    cell size in pixels, when the terminal will\n");
-    printf("                not report its own\n");
     printf("  --no-color    plain text, one symbol per slice\n");
     printf("  -h, --help    this message\n");
 }
@@ -62,10 +57,8 @@ static void list_charts(void)
 int main(int argc, char **argv)
 {
     const char *target = ".";
-    Mode wanted = MODE_AUTO;
     ChartKind kind = CHART_PIE;
     bool want_color = true;
-    int force_cell_w = 0, force_cell_h = 0;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -81,23 +74,6 @@ int main(int argc, char **argv)
             if (!chart_lookup(c, &kind)) {
                 fprintf(stderr, "diskpi: unknown chart '%s' "
                                 "(try --chart=list)\n", c);
-                return 1;
-            }
-        } else if (strncmp(a, "--mode=", 7) == 0) {
-            const char *m = a + 7;
-            if (strcmp(m, "pixels") == 0)      wanted = MODE_PIXELS;
-            else if (strcmp(m, "blocks") == 0) wanted = MODE_BLOCKS;
-            else if (strcmp(m, "ascii") == 0)  wanted = MODE_ASCII;
-            else if (strcmp(m, "auto") == 0)   wanted = MODE_AUTO;
-            else {
-                fprintf(stderr, "diskpi: unknown mode '%s'\n", m);
-                return 1;
-            }
-        } else if (strncmp(a, "--cell=", 7) == 0) {
-            if (sscanf(a + 7, "%dx%d", &force_cell_w, &force_cell_h) != 2 ||
-                force_cell_w <= 0 || force_cell_h <= 0) {
-                fprintf(stderr, "diskpi: --cell wants WxH in pixels, "
-                                "e.g. --cell=9x18\n");
                 return 1;
             }
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
@@ -131,13 +107,6 @@ int main(int argc, char **argv)
 
     Term t;
     term_detect(&t, want_color);
-
-    if (force_cell_w > 0) {
-        t.cell_w = force_cell_w;
-        t.cell_h = force_cell_h;
-        if (wanted == MODE_PIXELS)
-            t.kitty = true;     /* the user is asserting support */
-    }
 
     if (n == 0) {
         printf("diskpi: %s is empty\n", label);
@@ -242,23 +211,6 @@ int main(int argc, char **argv)
 
     Chart chart = { slice, cum, pct, slices, 0.0 };
 
-    /* ------------------------------------------------------ pick a driver */
-
-    Mode mode;
-    if (wanted != MODE_AUTO)
-        mode = wanted;
-    else if (t.kitty && t.color)
-        mode = MODE_PIXELS;
-    else if (t.color)
-        mode = MODE_BLOCKS;
-    else
-        mode = MODE_ASCII;
-
-    if (mode == MODE_PIXELS && (!t.kitty || t.cell_w <= 0))
-        mode = t.color ? MODE_BLOCKS : MODE_ASCII;
-    if (mode != MODE_ASCII && !t.color)
-        mode = MODE_ASCII;
-
     /* ------------------------------------------------------------- output */
 
     char total_buf[32], header[4096];
@@ -289,7 +241,7 @@ int main(int argc, char **argv)
     fputc('\n', stdout);
 
     ChartCtx ctx = {
-        &t, &chart, mode, label, total, total_files, n,
+        &t, &chart, label, total, total_files, n,
         t.cols, rows_avail, legend_w, indent
     };
     chart_draw(&ctx, kind);

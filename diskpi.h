@@ -19,21 +19,10 @@ typedef struct {
     char       sym;      /* stand-in for colour when colour is unavailable */
 } Entry;
 
-typedef enum {
-    MODE_AUTO,
-    MODE_PIXELS,    /* kitty graphics protocol: real, antialiased pixels */
-    MODE_BLOCKS,    /* U+2580 half blocks: two colour rows per text row */
-    MODE_ASCII      /* one character per cell, no colour needed */
-} Mode;
-
 typedef struct {
     int  cols, rows;      /* terminal size in cells */
-    int  cell_w, cell_h;  /* size of one cell in pixels, 0 when unknown */
     bool color;
     bool truecolor;
-    bool kitty;           /* graphics protocol answered our query */
-    bool have_bg;
-    RGB  bg;              /* terminal background, for antialiasing */
 } Term;
 
 /* One drawable wedge, plus where it sits on the circle. */
