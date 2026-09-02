@@ -16,7 +16,8 @@
 #define LEGEND_MAX 54
 #define FILES_AT   52       /* legend wide enough to earn a file count */
 #define COL_MIN     4        /* narrowest column worth drawing, in cells */
-#define MAX_ROWS   16
+#define MAX_ROWS   48       /* a backstop, not the usual limit:
+                             * bars take the rows the window has */
 
 static void spaces(int n)
 {
@@ -194,8 +195,10 @@ static void draw_bars(ChartCtx *x)
         legend_w--;
         bar_cols++;
     }
-    if (bar_cols > 64)
-        bar_cols = 64;
+    /* The bar is the drawing; give it whatever the legend does not
+     * need rather than freezing it at a fixed length. */
+    if (bar_cols > 120)
+        bar_cols = 120;
     if (legend_w < LEGEND_MIN || bar_cols < 8) {
         plain_bars(x);
         return;

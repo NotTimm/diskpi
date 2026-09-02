@@ -137,8 +137,8 @@ void chart_table(ChartCtx *x)
             if (w > files_w) files_w = w;
         }
     }
-    if (name_w > 40)
-        name_w = 40;
+    if (name_w > 64)
+        name_w = 64;
 
     /* Fit the columns. The bar is the point of the table, so a squeeze comes
      * out of the name first, then out of the file counts, and only when
@@ -148,8 +148,8 @@ void chart_table(ChartCtx *x)
     int bar_cap = avail / 3;
     if (bar_cap < 28)
         bar_cap = 28;
-    if (bar_cap > 44)
-        bar_cap = 44;
+    if (bar_cap > 96)
+        bar_cap = 96;
 
     int bar_w = 0;
     for (;;) {
@@ -468,8 +468,8 @@ void chart_gauge(ChartCtx *x)
     /* Reserve the text first; the arc gets whatever rows are left over. */
     int lines = g.n > x->rows ? x->rows : g.n;
     int arc_rows = x->rows - lines;
-    if (arc_rows > 12)
-        arc_rows = 12;
+    if (arc_rows > 24)
+        arc_rows = 24;
 
     int avail = x->cols - x->indent;
     int arc_cols = arc_rows * 3 + 4;
@@ -500,8 +500,8 @@ void chart_gauge(ChartCtx *x)
         int budget = x->rows;
         if (have_fs && budget > 0) {
             int bar_w = avail - display_width(pct_buf) - 14;
-            if (bar_w > 40)
-                bar_w = 40;
+            if (bar_w > 80)
+                bar_w = 80;
             if (bar_w >= 4) {
                 pad(x->indent);
                 t_dim(t);

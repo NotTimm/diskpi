@@ -49,6 +49,7 @@ Entry *scan_directory(const char *path, int *count,
 
 /* render.c */
 RGB  hsl(double h, double s, double l);
+RGB  palette(int i, int n);   /* colour for slice i of n, high contrast */
 void human_size(long long bytes, char *out, size_t out_len);
 int  display_width(const char *s);
 void fit(const char *src, char *dst, size_t dst_len, int width);

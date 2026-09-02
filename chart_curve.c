@@ -61,9 +61,11 @@ void chart_curve(ChartCtx *x, bool filled)
     if (w < 12)
         w = 12;
 
-    int bar_w = w / 4;
-    if (bar_w > 18)
-        bar_w = 18;
+    /* The curve's bar is the only picture this chart has, so it grows
+     * with the window instead of stopping at a fixed width. */
+    int bar_w = w / 3;
+    if (bar_w > 48)
+        bar_w = 48;
     int mark_w = 8;
     int name_w = w - 3 - 1 - 7 - (bar_w + 3) - mark_w;
     if (name_w < 8) {

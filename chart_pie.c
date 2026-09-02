@@ -1,11 +1,17 @@
 /*
- * Pie and doughnut, drawn as an actual circle of braille dots (dots.c),
- * with the legend beside it. Below a certain size there is no room for a
- * circle worth drawing, so it falls back to a plain list.
+ * Pie and doughnut, drawn as a circle of braille dots (dots.c) with the
+ * legend beside it. The circle takes every row and column the legend does
+ * not need, so a big window gets a big chart.
  *
  * Wedges run clockwise from twelve o'clock and are inset at both ends by a
  * hairline so neighbouring fills never touch. A wedge too thin to survive
  * its own gap keeps its full span instead of disappearing.
+ *
+ * Any wedge with room for it is labelled with its share, written over the
+ * dots by the row callback: the cursor is rewound across the columns it has
+ * just printed, the text goes down, and it is wound forward again before
+ * the legend. That is safe because the label only ever covers cells of its
+ * own wedge.
  */
 
 #define _DEFAULT_SOURCE
@@ -15,7 +21,12 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #define GAP_SUB     1.5     /* hairline between wedges, in subpixels */
 #define GAP_MIN_R  20.0     /* under this radius the hairline costs more
@@ -23,8 +34,8 @@
 #define HOLE_R      0.55    /* doughnut inner radius, in outer radii */
 #define GUTTER      3       /* columns between the circle and the legend */
 #define LEGEND_MIN 26       /* narrower than this, legend_line overflows */
-#define MAX_ROWS   18        /* a circle taller than this is more detail
-                              * than a terminal legend has room to explain */
+#define MAX_ROWS   44       /* past this a circle is just a lot of dots */
+#define LABEL_MIN_PCT 0.035 /* below this a wedge label is clutter */
 
 /* ------------------------------------------------------------- text bits */
 
@@ -102,51 +113,84 @@ static void pie_fallback(const ChartCtx *x)
     }
 }
 
-/* ------------------------------------------------------------- row output */
+/* --------------------------------------------------------------- overlays */
+
+typedef struct {
+    int  row, col;
+    RGB  color;
+    bool bold;
+    char text[24];
+} Overlay;
 
 typedef struct {
     const ChartCtx *x;
-    int    canvas_cols;
-    int    legend_start;
-    int    legend_n;        /* entries actually listed */
-    int    more;            /* entries folded into a trailing summary */
-    bool   show_files;
-    int    hole_rows;       /* 0, or 2 lines centred in the doughnut */
-    int    hole_row[2];
-    int    hole_col[2];
-    char   hole_text[2][48];
+    int      canvas_cols;
+    int      legend_start;
+    int      legend_n;        /* entries actually listed */
+    int      more;            /* entries folded into a trailing summary */
+    bool     show_files;
+    Overlay *over;
+    int      n_over;
 } PieRows;
 
-/* Write one hole line by rewinding over the dot columns already printed. */
-static void hole_line(const PieRows *p, int k)
+/* Ink that stays readable on top of the wedge it sits in. */
+static RGB ink_on(RGB fill)
 {
-    const char *text = p->hole_text[k];
-    int len = display_width(text);
-    int back = p->canvas_cols - p->hole_col[k];
+    double lum = 0.299 * fill.r + 0.587 * fill.g + 0.114 * fill.b;
+    RGB dark = { 18, 18, 22 }, light = { 250, 250, 252 };
+    return lum > 145.0 ? dark : light;
+}
 
-    if (len <= 0 || back <= 0 || back > p->canvas_cols)
-        return;
+static int cmp_overlay(const void *a, const void *b)
+{
+    const Overlay *oa = a, *ob = b;
+    if (oa->row != ob->row)
+        return oa->row < ob->row ? -1 : 1;
+    return oa->col < ob->col ? -1 : (oa->col > ob->col ? 1 : 0);
+}
 
-    printf("\033[%dD", back);
-    if (k == 0)
-        t_bold(p->x->t);
-    else
-        t_dim(p->x->t);
-    fputs(text, stdout);
-    t_reset(p->x->t);
+/* Rewind across the dots just printed, drop the labels for this row in
+ * left-to-right order, and wind forward again for the legend. */
+static void draw_overlays(const PieRows *p, int row)
+{
+    int cur = p->canvas_cols;
+    bool moved = false;
 
-    int forward = back - len;
-    if (forward > 0)
-        printf("\033[%dC", forward);
+    for (int i = 0; i < p->n_over; i++) {
+        const Overlay *o = &p->over[i];
+        if (o->row != row)
+            continue;
+
+        int len = display_width(o->text);
+        if (len <= 0 || o->col < 0 || o->col + len > p->canvas_cols)
+            continue;
+
+        int delta = cur - o->col;
+        if (delta > 0)
+            printf("\033[%dD", delta);
+        else if (delta < 0)
+            printf("\033[%dC", -delta);
+
+        if (o->bold)
+            t_bold(p->x->t);
+        else
+            t_fg(p->x->t, o->color);
+        fputs(o->text, stdout);
+        t_reset(p->x->t);
+
+        cur = o->col + len;
+        moved = true;
+    }
+
+    if (moved && cur < p->canvas_cols)
+        printf("\033[%dC", p->canvas_cols - cur);
 }
 
 static void pie_row(void *ctx, int row)
 {
     const PieRows *p = ctx;
 
-    for (int k = 0; k < p->hole_rows; k++)
-        if (p->hole_row[k] == row)
-            hole_line(p, k);
+    draw_overlays(p, row);
 
     int li = row - p->legend_start;
     if (li < 0)
@@ -192,25 +236,86 @@ static void draw_wedges(Dots *dt, const Chart *c, double cx, double cy,
     }
 }
 
-/* Two lines centred in the hole, if the chord at their outer edge is wide
- * enough to hold them. Subpixels are 2 wide by 4 tall per cell. */
-static void place_hole_text(PieRows *p, int cols, int rows, const ChartCtx *x,
-                            double cxs, double cys, double r_in)
+/* A share written into the middle of its own wedge, where the wedge is wide
+ * enough at that radius to hold it without touching either edge. */
+static int place_labels(Overlay *over, const ChartCtx *x, int cols, int rows,
+                        double cxs, double cys, double r_in, double r_out)
 {
-    p->hole_rows = 0;
+    const Chart *c = x->data;
+    int n_over = 0;
+    double r_label = r_in > 0.0 ? (r_in + r_out) / 2.0 : r_out * 0.62;
+
+    /* One label per row keeps them from running into each other. */
+    bool *taken = calloc((size_t)rows, sizeof(bool));
+    if (!taken)
+        return 0;
+
+    double prev = 0.0;
+    for (int i = 0; i < c->n; i++) {
+        double a0 = prev * 360.0, a1 = c->cum[i] * 360.0;
+        prev = c->cum[i];
+
+        double span = a1 - a0;
+        if (span <= 0.0 || c->pct[i] < LABEL_MIN_PCT)
+            continue;
+
+        char text[24];
+        snprintf(text, sizeof(text), "%.0f%%", c->pct[i] * 100.0);
+        int len = display_width(text);
+
+        /* The chord the wedge spans at the label's radius, in cells. */
+        double chord = 2.0 * r_label * sin(span * M_PI / 360.0);
+        if (span >= 360.0)
+            chord = 2.0 * r_label;
+        if (chord / 2.0 < len + 1)
+            continue;
+
+        double mid = (a0 + a1) / 2.0 * M_PI / 180.0;
+        double px = cxs + r_label * sin(mid);
+        double py = cys - r_label * cos(mid);
+
+        int row = (int)(py / 4.0);
+        int col = (int)lround(px / 2.0 - len / 2.0);
+        if (row < 0 || row >= rows || taken[row])
+            continue;
+        if (col < 0)
+            col = 0;
+        if (col + len > cols)
+            col = cols - len;
+        if (col < 0)
+            continue;
+
+        taken[row] = true;
+        over[n_over].row = row;
+        over[n_over].col = col;
+        over[n_over].color = ink_on(c->slice[i]->color);
+        over[n_over].bold = false;
+        snprintf(over[n_over].text, sizeof(over[n_over].text), "%s", text);
+        n_over++;
+    }
+
+    free(taken);
+    return n_over;
+}
+
+/* Two lines centred in the doughnut's hole, if the chord at their outer
+ * edge is wide enough to hold them. Subpixels are 2 wide by 4 tall. */
+static int place_hole_text(Overlay *over, const ChartCtx *x, int cols,
+                           int rows, double cxs, double cys, double r_in)
+{
     if (r_in <= 4.0)
-        return;
+        return 0;
 
     int row_a = (int)lround(cys / 4.0) - 1;
     if (row_a < 0 || row_a + 1 >= rows)
-        return;
+        return 0;
 
     double half = sqrt(r_in * r_in - 4.0 * 4.0);
     int room = (int)floor(2.0 * half / 2.0);
     if (room > cols)
         room = cols;
     if (room < 3)
-        return;
+        return 0;
 
     char size_buf[32], count_buf[48];
     human_size(x->total, size_buf, sizeof(size_buf));
@@ -218,6 +323,8 @@ static void place_hole_text(PieRows *p, int cols, int rows, const ChartCtx *x,
              x->entries == 1 ? "y" : "ies");
 
     const char *src[2] = { size_buf, count_buf };
+    int n_over = 0;
+
     for (int k = 0; k < 2; k++) {
         int len = display_width(src[k]);
         if (len > room)
@@ -229,11 +336,14 @@ static void place_hole_text(PieRows *p, int cols, int rows, const ChartCtx *x,
         if (col < 0)
             break;
 
-        snprintf(p->hole_text[k], sizeof(p->hole_text[k]), "%s", src[k]);
-        p->hole_row[k] = row_a + k;
-        p->hole_col[k] = col;
-        p->hole_rows = k + 1;
+        over[n_over].row = row_a + k;
+        over[n_over].col = col;
+        over[n_over].bold = (k == 0);
+        over[n_over].color = (RGB){ 200, 200, 210 };
+        snprintf(over[n_over].text, sizeof(over[n_over].text), "%s", src[k]);
+        n_over++;
     }
+    return n_over;
 }
 
 /* ------------------------------------------------------------------ entry */
@@ -249,7 +359,8 @@ void chart_pie(ChartCtx *x, bool doughnut)
 
     /* Braille dots are close to square once a cell's 2x4 subgrid is spread
      * over its usual on-screen proportions, so a round circle just needs
-     * twice as many columns of cells as rows. */
+     * twice as many columns of cells as rows. The chart takes whatever the
+     * legend leaves, in both directions. */
     int rows = x->rows > MAX_ROWS ? MAX_ROWS : x->rows;
     int cols = rows * 2;
     if (cols > avail) {
@@ -283,6 +394,16 @@ void chart_pie(ChartCtx *x, bool doughnut)
     p.canvas_cols = cols;
     p.show_files  = x->legend_w >= 52;
 
+    /* Room for a label per slice, plus the doughnut's two hole lines. */
+    p.over = calloc((size_t)x->data->n + 2, sizeof(Overlay));
+    if (p.over && x->t->color) {
+        p.n_over = place_labels(p.over, x, cols, rows, cxs, cys, r_in, r_out);
+        if (doughnut)
+            p.n_over += place_hole_text(p.over + p.n_over, x, cols, rows,
+                                        cxs, cys, r_in);
+        qsort(p.over, (size_t)p.n_over, sizeof(Overlay), cmp_overlay);
+    }
+
     int n = x->data->n;
     p.legend_n = n;
     if (n > x->rows) {
@@ -301,9 +422,6 @@ void chart_pie(ChartCtx *x, bool doughnut)
     if (p.legend_start < 0)
         p.legend_start = 0;
 
-    if (doughnut)
-        place_hole_text(&p, cols, rows, x, cxs, cys, r_in);
-
     int total_rows = p.legend_start + legend_rows;
     if (total_rows < rows)
         total_rows = rows;
@@ -312,4 +430,5 @@ void chart_pie(ChartCtx *x, bool doughnut)
 
     dots_present(dt, x->t, x->indent, total_rows, pie_row, &p);
     dots_free(dt);
+    free(p.over);
 }

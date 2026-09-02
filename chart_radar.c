@@ -20,7 +20,7 @@
 
 /* More spokes than this and neither the polygon nor its labels survive. */
 #define RADAR_SPOKES  10
-#define MAX_ROWS      16
+#define MAX_ROWS      48
 #define LABEL_LEN     24
 
 static void spaces(int n)

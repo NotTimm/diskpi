@@ -40,7 +40,7 @@ RGB hsl(double h, double s, double l)
 
 void human_size(long long bytes, char *out, size_t out_len)
 {
-    static const char *unit[] = { "B", "K", "M", "G", "T", "P" };
+    static const char *unit[] = { "B", "KB", "MB", "GB", "TB", "PB" };
     double value = (double)bytes;
     int i = 0;
 
@@ -55,6 +55,44 @@ void human_size(long long bytes, char *out, size_t out_len)
         snprintf(out, out_len, "%.1f %s", value, unit[i]);
     else
         snprintf(out, out_len, "%.0f %s", value, unit[i]);
+}
+
+/* ---------------------------------------------------------------- colour */
+
+/* Up to twelve entries get hand-picked colours: every neighbouring pair is
+ * a long way round the wheel from the last, which no formula spacing hues
+ * evenly manages as well at small counts. Past twelve there are more slices
+ * than there are colours anyone can tell apart by hue alone, so the walk
+ * takes over - the golden angle for the hue, and a three-step cycle of
+ * lightness and saturation underneath it, so two slices that do land on a
+ * similar hue still differ in weight. */
+RGB palette(int i, int n)
+{
+    static const RGB vivid[12] = {
+        { 232,  72,  78 },   /* red      */
+        {  56, 176, 240 },   /* azure    */
+        {  92, 208,  96 },   /* green    */
+        { 246, 178,  48 },   /* amber    */
+        { 172, 114, 248 },   /* violet   */
+        {  40, 208, 192 },   /* teal     */
+        { 242,  96, 192 },   /* magenta  */
+        { 176, 216,  62 },   /* lime     */
+        {  92, 126, 246 },   /* blue     */
+        { 250, 134,  58 },   /* orange   */
+        { 246, 146, 170 },   /* pink     */
+        { 218, 202,  72 }    /* gold     */
+    };
+
+    if (i < 0)
+        i = 0;
+    if (n <= 12 && i < 12)
+        return vivid[i];
+
+    double hue = 200.0 + 137.508 * i;
+    static const double light[3] = { 0.64, 0.50, 0.74 };
+    static const double sat[3]   = { 0.88, 0.74, 0.96 };
+
+    return hsl(hue, sat[i % 3], light[i % 3]);
 }
 
 /* Columns a UTF-8 string occupies, counting one per code point. */

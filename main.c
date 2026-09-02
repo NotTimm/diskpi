@@ -17,9 +17,17 @@
 static const char symbols[] = "#*+=%@O~xwSVAHZ8&$";
 static const int  symbols_len = (int)(sizeof(symbols) - 1);
 
-/* Slices above this many entries are pointless: the wedges get too thin to
- * see and the legend outgrows the screen. The real limit is the terminal. */
-#define SLICE_CEILING 28
+/* The terminal is the real limit on how many slices are worth drawing; this
+ * is only a backstop for a very tall window, past which the thinnest wedges
+ * stop being distinguishable however much room there is to list them. */
+#define SLICE_CEILING 64
+
+/* An entry smaller than this share of the total is pooled rather than drawn:
+ * it cannot be told apart from its neighbours at any terminal size. */
+#define MIN_SHARE  0.004
+
+/* ...but always list at least this many, however small they are. */
+#define MIN_SLICES 8
 
 /* Narrowest legend line that still fits inside the width it is given:
  * a marker, a six-column name, the size and the percentage. */
@@ -59,6 +67,13 @@ int main(int argc, char **argv)
     const char *target = ".";
     ChartKind kind = CHART_PIE;
     bool want_color = true;
+
+    /* A drawn chart is tens of thousands of tiny writes - three bytes per
+     * braille cell, plus a colour escape per run. Buffering the lot and
+     * flushing once at the end turns that into a handful of write calls,
+     * and stops a half-drawn chart appearing a row at a time. */
+    static char outbuf[1 << 16];
+    setvbuf(stdout, outbuf, _IOFBF, sizeof(outbuf));
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -131,12 +146,18 @@ int main(int argc, char **argv)
     if (rows_avail < 1)
         rows_avail = 1;
 
-    /* A wide terminal earns a file-count column in the legend. Below
-     * LEGEND_MIN a legend line cannot hold its fixed size and percentage
-     * columns and would overrun; charts fall back to text well before that. */
-    int legend_w = t.cols >= 96 ? 54 : t.cols / 2;
-    if (legend_w > 54)
-        legend_w = 54;
+    /* A wide terminal earns a file-count column in the legend, and a very
+     * wide one earns room for longer names rather than a wider margin.
+     * Below LEGEND_MIN a legend line cannot hold its fixed size and
+     * percentage columns and would overrun. */
+    int legend_cap = 54;
+    if (t.cols >= 200)      legend_cap = 78;
+    else if (t.cols >= 160) legend_cap = 70;
+    else if (t.cols >= 130) legend_cap = 62;
+
+    int legend_w = t.cols >= 96 ? legend_cap : t.cols / 2;
+    if (legend_w > legend_cap)
+        legend_w = legend_cap;
     if (legend_w < LEGEND_MIN)
         legend_w = LEGEND_MIN;
     if (legend_w > t.cols - indent)
@@ -151,6 +172,34 @@ int main(int argc, char **argv)
         max_slices = 4;
 
     /* --------------------------------------------- group the tail, colour */
+
+    /* Rows are not the only reason to stop listing entries. On a chart that
+     * divides one shape between the entries, anything under a fraction of a
+     * percent can only be drawn as a sliver, and a run of them turns the
+     * chart into confetti and the legend into a column of "0.0%" - those
+     * are worth more as one honest "N smaller items" line carrying their
+     * combined size. A chart that gives every entry its own row has no such
+     * problem and would rather fill the window, so it keeps them all. A
+     * floor of eight stops a directory of uniformly tiny things from
+     * collapsing to nothing. */
+    bool one_shape = (kind == CHART_PIE || kind == CHART_DOUGHNUT ||
+                      kind == CHART_STACKED);
+
+    if (one_shape) {
+        int visible = n;
+        for (int i = 0; i < n; i++)
+            if (total > 0 &&
+                (double)entries[i].size / (double)total < MIN_SHARE) {
+                visible = i;
+                break;
+            }
+        if (visible < MIN_SLICES)
+            visible = MIN_SLICES;
+        if (max_slices > visible)
+            max_slices = visible;
+    }
+    if (max_slices < 4)
+        max_slices = 4;
 
     int shown = n;
     Entry other;
@@ -178,13 +227,11 @@ int main(int argc, char **argv)
 
     int slices = shown + (has_other ? 1 : 0);
 
-    /* Hues walk by the golden angle so neighbouring wedges never land on
-     * neighbouring colours, however many slices there turn out to be. */
+    /* Colours are picked knowing how many there will be, so a handful of
+     * slices can have the vivid, widely-separated end of the palette to
+     * themselves rather than a slice of a formula meant for thirty. */
     for (int i = 0; i < shown; i++) {
-        double hue = 205.0 + 137.508 * i;
-        double light = (i % 2) ? 0.56 : 0.65;
-        double sat = (i % 3 == 2) ? 0.60 : 0.72;
-        entries[i].color = hsl(hue, sat, light);
+        entries[i].color = palette(i, slices);
         entries[i].sym = symbols[i % symbols_len];
     }
 
