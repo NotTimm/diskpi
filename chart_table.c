@@ -11,7 +11,9 @@
 #define _DEFAULT_SOURCE
 
 #include "chart.h"
+#include "dots.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/statvfs.h>
@@ -379,6 +381,34 @@ static void gauge_line(const GaugeText *g, int i, int indent, int cols)
     fputc('\n', stdout);
 }
 
+typedef struct {
+    const Term *t;
+    int         hole_row;
+    int         hole_col;
+    int         canvas_cols;
+    char        hole_text[16];
+} GaugeRows;
+
+static void gauge_row(void *ctx, int row)
+{
+    const GaugeRows *g = ctx;
+    if (row != g->hole_row)
+        return;
+
+    int len = display_width(g->hole_text);
+    int back = g->canvas_cols - g->hole_col;
+    if (len <= 0 || back <= 0 || back > g->canvas_cols)
+        return;
+
+    printf("\033[%dD", back);
+    t_bold(g->t);
+    fputs(g->hole_text, stdout);
+    t_reset(g->t);
+    int forward = back - len;
+    if (forward > 0)
+        printf("\033[%dC", forward);
+}
+
 void chart_gauge(ChartCtx *x)
 {
     if (!x || !x->t || x->rows <= 0 || x->cols <= x->indent)
@@ -432,30 +462,128 @@ void chart_gauge(ChartCtx *x)
     }
 
     RGB used_col = fullness_color(used_frac);
+    RGB tree_col = (x->data && x->data->n > 0)
+                 ? x->data->slice[0]->color : used_col;
+
+    /* Reserve the text first; the arc gets whatever rows are left over. */
+    int lines = g.n > x->rows ? x->rows : g.n;
+    int arc_rows = x->rows - lines;
+    if (arc_rows > 12)
+        arc_rows = 12;
 
     int avail = x->cols - x->indent;
-    int budget = x->rows;
+    int arc_cols = arc_rows * 3 + 4;
+    if (arc_cols > avail)
+        arc_cols = avail;
 
-    if (have_fs && budget > 0) {
-        /* "filesystem  " + bar + " " + percentage, one column to spare. */
-        int bar_w = avail - display_width(pct_buf) - 14;
-        if (bar_w > 40)
-            bar_w = 40;
-        if (bar_w >= 4) {
-            pad(x->indent);
-            t_dim(t);
-            fputs("filesystem  ", stdout);
-            t_reset(t);
-            int drawn = inline_bar(t, used_frac, bar_w, used_col,
-                                   !t->color, false);
-            pad(bar_w - drawn);
-            t_dim(t);
-            printf(" %s", pct_buf);
-            t_reset(t);
-            fputc('\n', stdout);
-            budget--;
+    Dots *dt = (have_fs && arc_rows >= 6 && arc_cols >= 12)
+             ? dots_new(arc_cols, arc_rows) : NULL;
+
+    /* The arc spans 270 degrees round to 135, so it reaches full width but
+     * only 0.707 r below the centre: 1.708 r of height in all, in subpixels. */
+    double subw = arc_cols * 2.0, subh = arc_rows * 4.0;
+    double radius = 0.0, cxs = 0.0, cys = 0.0;
+    if (dt) {
+        double by_w = (subw - 4.0) / 2.0;
+        double by_h = (subh - 4.0) / 1.708;
+        radius = by_w < by_h ? by_w : by_h;
+        cxs = subw / 2.0;
+        cys = 2.0 + radius;
+        if (radius < 10.0) {
+            dots_free(dt);
+            dt = NULL;
         }
     }
-    for (int i = 0; i < g.n && budget > 0; i++, budget--)
+
+    if (!dt) {
+        /* No surface, or no room for one: a single inline meter instead. */
+        int budget = x->rows;
+        if (have_fs && budget > 0) {
+            int bar_w = avail - display_width(pct_buf) - 14;
+            if (bar_w > 40)
+                bar_w = 40;
+            if (bar_w >= 4) {
+                pad(x->indent);
+                t_dim(t);
+                fputs("filesystem  ", stdout);
+                t_reset(t);
+                int drawn = inline_bar(t, used_frac, bar_w, used_col,
+                                       !t->color, false);
+                pad(bar_w - drawn);
+                t_dim(t);
+                printf(" %s", pct_buf);
+                t_reset(t);
+                fputc('\n', stdout);
+                budget--;
+            }
+        }
+        for (int i = 0; i < g.n && budget > 0; i++, budget--)
+            gauge_line(&g, i, x->indent, x->cols);
+        return;
+    }
+
+    double track_t = radius * 0.22;
+    if (track_t < 3.0) track_t = 3.0;
+    double r_out = radius, r_in = radius - track_t;
+
+    double gap = radius * 0.08;
+    if (gap < 1.5) gap = 1.5;
+    double t_out = r_in - gap;
+    double t_thick = track_t * 0.5;
+    if (t_thick < 2.0) t_thick = 2.0;
+    double t_in = t_out - t_thick;
+    bool inner = t_in > radius * 0.22;
+
+    RGB track = { 90, 90, 100 };
+
+    /* Wedges never overlap: the filled span and the track split the same
+     * 270 degrees rather than one being drawn over the other. */
+    double used_end = 225.0 + 270.0 * used_frac;
+    if (used_frac > 0.0)
+        dots_wedge(dt, cxs, cys, r_in, r_out, 225.0, used_end, used_col);
+    if (used_frac < 1.0)
+        dots_wedge(dt, cxs, cys, r_in, r_out, used_end, 495.0, track);
+
+    if (inner) {
+        double sweep = 270.0 * tree_frac;
+        double least = 90.0 / (t_out > 1.0 ? t_out : 1.0);
+        if (tree_frac > 0.0 && sweep < least)
+            sweep = least;
+        double tree_end = 225.0 + sweep;
+
+        if (sweep > 0.0)
+            dots_wedge(dt, cxs, cys, t_in, t_out, 225.0, tree_end, tree_col);
+        if (sweep < 270.0)
+            dots_wedge(dt, cxs, cys, t_in, t_out, tree_end, 495.0, track);
+    }
+
+    GaugeRows gr;
+    memset(&gr, 0, sizeof(gr));
+    gr.t = t;
+    gr.canvas_cols = arc_cols;
+    gr.hole_row = -1;
+
+    double hole = inner ? t_in : r_in;
+    if (hole > 4.0) {
+        int row = (int)lround(cys / 4.0) - 1;
+        if (row >= 0 && row < arc_rows) {
+            int len = display_width(pct_buf);
+            double half = sqrt(hole * hole - 4.0 * 4.0);
+            int room = (int)floor(2.0 * half / 2.0);
+            if (len <= room) {
+                int col = (int)lround(cxs / 2.0 - len / 2.0);
+                if (col < 0) col = 0;
+                if (col + len > arc_cols) col = arc_cols - len;
+                gr.hole_row = row;
+                gr.hole_col = col;
+                snprintf(gr.hole_text, sizeof(gr.hole_text), "%s", pct_buf);
+            }
+        }
+    }
+
+    dots_present(dt, t, x->indent, arc_rows, gauge_row, &gr);
+    dots_free(dt);
+
+    for (int i = 0; i < lines; i++)
         gauge_line(&g, i, x->indent, x->cols);
 }
