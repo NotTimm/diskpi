@@ -133,12 +133,14 @@ typedef struct {
     int      n_over;
 } PieRows;
 
-/* Ink that stays readable on top of the wedge it sits in. */
-static RGB ink_on(RGB fill)
+/* Labels are always white. A wedge is a field of dots rather than a solid
+ * fill, so the terminal background shows through between them and even a
+ * pale wedge reads as dark overall - dark ink disappears into it whatever
+ * the fill colour says. */
+static RGB label_ink(void)
 {
-    double lum = 0.299 * fill.r + 0.587 * fill.g + 0.114 * fill.b;
-    RGB dark = { 18, 18, 22 }, light = { 250, 250, 252 };
-    return lum > 145.0 ? dark : light;
+    RGB white = { 255, 255, 255 };
+    return white;
 }
 
 static int cmp_overlay(const void *a, const void *b)
@@ -173,8 +175,7 @@ static void draw_overlays(const PieRows *p, int row)
 
         if (o->bold)
             t_bold(p->x->t);
-        else
-            t_fg(p->x->t, o->color);
+        t_fg(p->x->t, o->color);
         fputs(o->text, stdout);
         t_reset(p->x->t);
 
@@ -288,7 +289,7 @@ static int place_labels(Overlay *over, const ChartCtx *x, int cols, int rows,
         taken[row] = true;
         over[n_over].row = row;
         over[n_over].col = col;
-        over[n_over].color = ink_on(c->slice[i]->color);
+        over[n_over].color = label_ink();
         over[n_over].bold = false;
         snprintf(over[n_over].text, sizeof(over[n_over].text), "%s", text);
         n_over++;
@@ -339,7 +340,7 @@ static int place_hole_text(Overlay *over, const ChartCtx *x, int cols,
         over[n_over].row = row_a + k;
         over[n_over].col = col;
         over[n_over].bold = (k == 0);
-        over[n_over].color = (RGB){ 200, 200, 210 };
+        over[n_over].color = label_ink();
         snprintf(over[n_over].text, sizeof(over[n_over].text), "%s", src[k]);
         n_over++;
     }
