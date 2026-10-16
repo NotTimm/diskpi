@@ -205,6 +205,7 @@ int main(int argc, char **argv)
     Entry other;
     memset(&other, 0, sizeof(other));
     bool has_other = false;
+    bool other_name_owned = false;
 
     if (n > max_slices) {
         shown = max_slices - 1;
@@ -217,6 +218,10 @@ int main(int argc, char **argv)
         snprintf(buf, sizeof(buf), "%d smaller item%s", rest,
                  rest == 1 ? "" : "s");
         other.name = strdup(buf);
+        if (other.name)
+            other_name_owned = true;
+        else
+            other.name = rest == 1 ? "1 smaller item" : "smaller items";
         other.aggregate = true;
         other.color = (RGB){ 128, 128, 138 };
         other.sym = '.';
@@ -240,6 +245,14 @@ int main(int argc, char **argv)
     double *pct = malloc((size_t)slices * sizeof(double));
     if (!slice || !cum || !pct) {
         fprintf(stderr, "diskpi: out of memory\n");
+        for (int i = 0; i < n; i++)
+            free(entries[i].name);
+        free(entries);
+        if (other_name_owned)
+            free(other.name);
+        free(slice);
+        free(cum);
+        free(pct);
         return 1;
     }
 
@@ -299,7 +312,8 @@ int main(int argc, char **argv)
     for (int i = 0; i < n; i++)
         free(entries[i].name);
     free(entries);
-    free(other.name);
+    if (other_name_owned)
+        free(other.name);
     free(slice);
     free(cum);
     free(pct);

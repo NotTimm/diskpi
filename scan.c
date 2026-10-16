@@ -250,8 +250,12 @@ Entry *scan_directory(const char *path, int *count,
             entries = grown;
         }
 
+        char *owned = strdup(name);
+        if (!owned)
+            continue;
+
         memset(&entries[n], 0, sizeof(entries[n]));
-        entries[n].name   = strdup(name);
+        entries[n].name   = owned;
         entries[n].is_dir = S_ISDIR(st.st_mode);
         entries[n].sym    = '#';
         entries[n].color  = (RGB){ 128, 128, 128 };
