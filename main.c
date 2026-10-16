@@ -203,6 +203,7 @@ int main(int argc, char **argv)
 
     int shown = n;
     Entry other;
+    char other_name_fallback[64];
     memset(&other, 0, sizeof(other));
     bool has_other = false;
     bool other_name_owned = false;
@@ -220,8 +221,11 @@ int main(int argc, char **argv)
         other.name = strdup(buf);
         if (other.name)
             other_name_owned = true;
-        else
-            other.name = rest == 1 ? "1 smaller item" : "smaller items";
+        else {
+            snprintf(other_name_fallback, sizeof(other_name_fallback),
+                     "%s", buf);
+            other.name = other_name_fallback;
+        }
         other.aggregate = true;
         other.color = (RGB){ 128, 128, 138 };
         other.sym = '.';
