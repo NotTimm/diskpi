@@ -222,8 +222,7 @@ int main(int argc, char **argv)
         if (other.name)
             other_name_owned = true;
         else {
-            snprintf(other_name_fallback, sizeof(other_name_fallback),
-                     "%s", buf);
+            memcpy(other_name_fallback, buf, sizeof(other_name_fallback));
             other.name = other_name_fallback;
         }
         other.aggregate = true;
